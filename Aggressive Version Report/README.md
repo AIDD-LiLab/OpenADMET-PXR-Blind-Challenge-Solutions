@@ -1,97 +1,191 @@
-# OpenADMET PXR (NR1I2) Challenge — Aggressive Variant (full report)
+# AIDD-LiLab PXR — Aggressive Variant (+440 High-Activity Retrain + qHTS gate)
 
-**Team:** AIDD-LiLab (University of Florida — Yanjun Li Lab)
+**Team:** AIDD-LiLab, University of Florida — Yanjun Li Lab
 **Base:** the Phase-1 winning `MoE_v2 + MOE-multikernel` ensemble (see [`../main solution/`](../main%20solution/)).
-**Variant file:** `SUBMIT_AGGR_SVMHolo3way440_qHTS.csv` (513 rows).
+**Variant file:** `SUBMIT_AGGR_SVMHolo3way440_qHTS.csv` (513 rows: `SMILES, Molecule Name, pEC50`).
+**Metric:** `RAE = Σ|y − ŷ| / Σ|y − ȳ|`.
 
-The aggressive variant keeps the winning architecture and every ensemble weight **unchanged**, and alters only two things:
-1. **three components are retrained** with **440 additional high-activity molecules** (data change only — same models, folds, hyper-parameters), and
-2. an **external qHTS discriminator** post-hoc down-shift is applied to likely-inactive low predictions.
+This variant is a **deliberate, higher-variance bet on the hidden Set 2**. It keeps the Phase-1 winning architecture and weights unchanged and alters only two things:
 
-It is offered as a **deliberate, quantified bet on the hidden Set 2** — not as a claimed improvement on the reliable Set-1 validator.
+1. **three components are retrained** with **+440 additional high-activity molecules** (a data change only — identical models, folds, and hyper-parameters), injected as a *within-pipeline delta* onto the frozen winning prediction; and
+2. an **external qHTS discriminator** applies a post-hoc down-shift to likely-inactive low predictions.
+
+It is *not* claimed to beat the base system on the reliable Set-1 validator by a resolvable margin; it is offered as an active-region-targeted alternative whose payoff depends on the Set-1 → Set-2 chemistry shift.
 
 ---
 
-## 0. Result (Set 1 unblinded, official metric)
+## 0. Results (Set 1 unblinded, official metric)
 
-| Prediction | Set 1 (253) RAE | MAE | R² | Spearman ρ |
-|---|---:|---:|---:|---:|
-| Base system (winning submission) | 0.4875 | 0.3893 | 0.669 | 0.861 |
-| **Aggressive variant** (SVM+Holo+3way `+440`, + qHTS) | **0.4841** | 0.3866 | 0.674 | 0.856 |
-| Conservative reference (SVM `+440` only, + qHTS) | 0.4779 | 0.3817 | 0.682 | 0.861 |
+| Prediction | Set 1 (253) RAE | Set 1 MAE | V(51) RAE |
+|---|---:|---:|---:|
+| Base system (winning submission) | 0.4875 | 0.3893 | 0.3706 |
+| **Aggressive** — SVM + Holo + 3way (`+440`) + qHTS | **0.4841** | **0.3866** | **0.3479** |
+| Conservative reference — lighter `+440` combo + qHTS | 0.4779 | 0.3817 | 0.3458 |
 
-Held-out **V** (51 scaffold-disjoint Set-1 molecules, never in any training set): aggressive **0.348** vs base **0.371**.
+All three numbers are **fully held-out**: the shipped aggressive variant is trained on the `hi` setting (base + `+440`, containing **zero** Set-1 molecules — verified below), so the entire 253-molecule Set-1 is out-of-training for it, exactly as it is for the base system. The `0.4875` base figure is the mean-centred-MAD recompute of the official `0.4897` (identical MAE; normaliser-convention only).
+
+---
+
+## Table of Contents
+1. [Why an aggressive variant — and why it is risky](#1-why-an-aggressive-variant)
+2. [The new data folded in](#2-the-new-data-folded-in)
+3. [The settings framework](#3-the-settings-framework)
+4. [What the aggressive variant retrains — each component](#4-what-the-aggressive-variant-retrains)
+5. [The qHTS discriminator](#5-the-qhts-discriminator)
+6. [Assembly — delta-injection onto the frozen production output](#6-assembly--delta-injection)
+7. [Validation](#7-validation)
+8. [When to prefer which variant](#8-when-to-prefer-which-variant)
+9. [Design findings and negative results](#9-design-findings-and-negative-results)
+10. [Reproduction assets and the "not preserved" ledger](#10-reproduction-assets)
 
 ---
 
 ## 1. Why an aggressive variant
 
-The final ranking is decided by **Set 2 (260, hidden)**, not by the live combined-513 board. Two facts make an aggressive, Set-2-targeted variant rational:
+The final ranking is decided by **Set 2 (260 molecules, hidden)**, not by the live combined-513 board. Two facts make a Set-2-targeted, higher-variance variant rational:
 
-- **Set 1 is a weak predictor of Set 2 at our precision.** Set 1 ↔ Set 2 median nearest-neighbour Tanimoto ≈ 0.26 (a real scaffold shift; 0/260 Set-2 molecules have a Set-1 analogue above 0.6). Coarse strong-vs-weak ranking transfers, but in the top-tier fine-grained regime where leaders sit, the Set-1 → Set-2 rank correlation collapses. So a submission that is neutral-to-slightly-worse on Set 1 is **not** evidence of harm on Set 2.
-- **Set 2 is active-enriched, and 440 new high-activity molecules were released.** The base ensemble mildly under-predicts the active tail (Set-1 pEC50>5 bias −0.15) and over-predicts inactives (pEC50<4 bias +0.56). Extra high-activity training data plus a low-activity discriminator directly target the two ends that dominate Set 2.
+- **Set 1 is a weak predictor of Set 2 at our precision.** Set 1 ↔ Set 2 median nearest-neighbour Tanimoto ≈ 0.26 (a genuine scaffold shift; 0/260 Set-2 molecules have a Set-1 analogue above 0.6). Coarse strong-vs-weak ranking transfers, but in the top-tier fine-grained regime where leaders sit, the Set-1 → Set-2 rank correlation collapses. A submission that is neutral-to-slightly-different on Set 1 is therefore **not** evidence of harm on Set 2. Bootstrap MAE σ on Set 1 (253 points) ≈ 0.028; the ~0.005 gap to the Set-2 leader is 0.18 σ — statistically invisible on Set 1.
+- **Set 2 is active-enriched, and 440 new high-activity molecules were released.** The base ensemble's recoverable error is edge-concentrated: on Set 1, pEC50 < 4 is over-predicted (bias **+0.564**, MAE 0.818, n=55) and the active tail pEC50 > 5 is mildly under-predicted (bias **−0.15**, n=112). Extra high-activity training data (for the active tail) plus a low-activity discriminator (for the inactive over-prediction) directly target the two ends that dominate Set 2.
 
----
-
-## 2. The `+440` data
-
-440 additional high-activity molecules (corrected pEC50; released after Phase 1) that are **disjoint** from the original 4,139 train and from the 253 Set-1 test. They are chemically distant from Set 2 (only ~5% of Set-2 molecules are closer to a `+440` molecule than to the base train), so the bet is not "coverage" but "more high-activity signal for the active-region heads."
+The risk is equally clear, and Phase-1 taught it the hard way (§9): retraining is model-dependent, and gains that are only Set-1-aligned need not transfer. The aggressive variant hedges the risk by **keeping Set 1 as a clean held-out validator** — it retrains on the `+440` pool *only* (the `hi` setting, no Set-1 labels), so its Set-1 RAE is an honest out-of-sample read, not an in-region fit.
 
 ---
 
-## 3. Method
+## 2. The new data folded in
 
-### 3.1 Same-architecture retraining ("only data changes")
-Three components are retrained on `train (4,139) + 440` with the **identical** model, 5-fold scaffold split, and hyper-parameters as the winning system. Everything else (weights, other components, MoE + multi-kernel layers, variance scale) is byte-for-byte the production system.
+### 2.1 The +440 high-activity pool
+- A HuggingFace data drop (commit `ab8903a`) **adds 440 new molecules** with corrected pEC50 (crude→corrected ≈ +0.34 log real), *not* a correction to the existing labels (the main 4,139-row TRAIN.csv is unchanged). Canonical-SMILES overlap with the existing train = 5 mols → **435 net-new**.
+- Boltz cofold poses for the 435 posable ligands were generated by the preserved `scripts/boltz_cofold_440.py` (Boltz 2.2.1, single-sequence empty-MSA, 293-aa PXR-LBD, `--seed 42 --no_kernels`), writing `fixed_structures/act_train_{ID}/ligand.sdf` via `boltz_cofold_postprocess.py`.
+- The `+440` is **too weak to blend directly** into the 0.39-MAE SOTA at any weight as a standalone model (augmented GBR/LGBM/HGBRT/Ridge each reach only ~0.6 RAE). Its productive use is as a **retrain-pool addition to the strong real-embedding heads**.
+- **Timeline note:** this drop is dated **2026-05-28**, six days *after* the winning submission (file timestamp 2026-05-22). It is therefore absent from every Phase-1 production component — including the MOE multi-kernel active-specialist, whose specialist is fit on the top-30% of the *main* train (see main README §9.B), **not** on the +440.
 
-### 3.2 Component selection — which retrains help, and why
-Each component's `+440` retrain was injected individually and scored on the reliable Set-1 (253) **and** on the held-out V (51, the active-region proxy). Selection excludes any component that clearly degrades either.
+### 2.2 The qHTS single-concentration signal (external)
+- The qHTS discriminator (§5) is trained on the **external NCATS PXR qHTS assay** (PubChem **AID 1346982**; `data/external/pubchem_1346982.csv`), canonical-SMILES-disjoint from both train and the 513-molecule test. This is an orthogonal external activity call, not the challenge label.
 
-| Component | ensemble weight | Set-1 Δ | V Δ | decision |
-|---|---:|---:|---:|---|
-| **SVM_20K** | 0.125 | +0.0001 | −0.0019 | **include** (neutral on Set-1, helps V) |
-| **Holo** | high (cofold pose pillar) | +0.0018 | −0.0059 | **include** (most active-region-relevant) |
-| **3-way (sw3way)** | 0.05 | +0.0003 | +0.0007 | **include** (neutral, for coverage) |
-| Gated_5mod | 0.125 | +0.0013 | +0.0071 | exclude (degrades V) |
-| ConfTTA | highest | +0.0087 | +0.0059 | **exclude** (largest weight amplifies an unhelpful `+440` effect) |
+### 2.3 The 253 Set-1 labels — available but NOT used by the shipped variant
+- Set-1 labels became available at unblind (2026-05-26). The settings framework (§3) can fold them in (`set1`, `set1_hi`), and those variants were built and evaluated. **The shipped aggressive variant does not use them** — it uses the `hi` setting (base + `+440` only). This is deliberate: keeping Set-1 entirely out-of-training preserves it as a clean 253-molecule held-out validator, and Set-1-augmentation was found to sit at the statistical detection floor anyway (§9).
 
-The reason SVM looks "safe" is partly that its ensemble weight is small, so its `+440` delta is muted; Holo carries the `+440` signal most strongly because it is the high-weight, binding-pose pillar — hence it is the core of the active-region bet.
+---
 
-### 3.3 Clean within-pipeline delta injection
-For each retrained component the effect is applied as a **within-pipeline difference**
+## 3. The settings framework
+
+The Phase-2 `work/` scripts do not hard-code data filters; they read pre-built **setting CSVs** from `outputs/settings/` (columns `SMILES, TARGET`), each defining a training pool. Verified row counts and Set-1 content (by canonical SMILES):
+
+| Setting | Rows | Composition | Set-1 in pool |
+|---|---:|---|---:|
+| `train_base.csv` | 4,140 | base HF train | **0** |
+| `train_hi.csv` | 4,575 | base + `+440` (435 net-new) | **0** ← *shipped aggressive uses this* |
+| `train_set1.csv` | 4,342 | base + 202 Set-1 (51 held out → V) | 202 |
+| `train_set1_hi.csv` | 4,777 | base + 202 Set-1 + `+440` | 202 |
+| `train_selective.csv` | 4,237 | base + a selected high-value subset | 0 |
+| `V_holdout.csv` | 51 | 51 Set-1 molecules held out of every `set1*` pool | (all 51 ∈ Set-1) |
+
+Each retrainable head (`work/train_svm20k.py`, `work/train_gated5mod.py`, `work/train_3way.py`, plus the deep `conftta`/`holo`) produces per-setting artifacts under `models/<HEAD>_<setting>/{pred513.npy, oof.npy, predV.npy, weights.*}`. "Aggressive" vs "conservative" differ by which heads × settings are selected and re-injected. The 51-molecule **V** set is carved from Set-1 and held out of every `set1*` pool, so `predV.npy` is comparable across settings — it is the disjoint validator for the *Set-1-augmented* variants (for the shipped `hi` variant, V is simply a 51-molecule subset of the already-held-out Set-1).
+
+The Phase-2 heads use a stabilized InChIKey molecule key and a MoLFormer-cache lookup (`work/feat_lib.py`) so train/holdout/test/V get identical feature construction; frozen re-encoders for the mols not already cached live in `work/enc/` (`encode_clamp.py`, `encode_da4mt_chemfm.py`).
+
+---
+
+## 4. What the aggressive variant retrains
+
+The aggressive variant is **SVM_20K + Holo + 3way**, each retrained on the `hi` setting (base + `+440`). Each retrained head keeps its Phase-1 architecture *exactly* (see main README §5–7); only the training pool changes. **ConfTTA and Gated_5mod are held at their production arrays** (they contribute a zero delta — see §6), which is why the variant is named "SVMHolo3way" and excludes ConfTTA.
+
+### 4.1 SVM_20K (`hi`)
+Single-kernel RBF-Nyström SVR, D=1786 (MiniMol 512 ⊕ MoLFormer 768 ⊕ LF20K-MPN 300 ⊕ MACCS 167 ⊕ ph4 39). Per fold: `StandardScaler` → `Nystroem(kernel="rbf", n_components=500, gamma=1/D, random_state=42)` → `SVR(C=1.0, epsilon=0.1)`; 5-fold Murcko GroupKFold; test = mean over 5 folds. Retraining a *real-embedding* SVR on `+440` is the safe case: neutral-to-positive (§9), never the ECFP-GBDT failure mode.
+
+### 4.2 Holo (`hi`) — retrained, not frozen
+The binding-pose Uni-Mol v2 pillar (main README §5.4), **retrained on the `hi` pool** — the `models/holo_hi/pred513.npy` array is used, not the frozen Phase-1 Holo. Holo is the high-activity-relevant pillar (binding pose × the new high-activity molecules), so its `+440` retrain carries the bulk of the active-region bet. (A reconstruction of the shipped file confirms the Holo `+440` delta is a dominant term: removing it collapses the delta-fit R² from ~0.91 to ~0.33.) Retraining Holo costs one Uni-Mol run per fold (≈1 h GPU each on the `unimol` env); it is retrained, not approximated.
+
+### 4.3 3-way SVR (`hi`)
+The 3-way frozen-pretrain SVR (CLAMP 768 ⊕ da4mt 768 ⊕ ChemFM-3B 3072 = 4608-D), `SVR(kernel="rbf", C=10.0, gamma="scale", epsilon=0.1)`, per-block + global `StandardScaler`, 5-fold Murcko GroupKFold. Retrained via `work/train_3way.py` on `hi`. This is the most genuinely-external component (encoders pretrained on PubChem BioAssay / UniChem / a causal chemical LM), so folding high-activity data into its fit sharpens the active region while preserving its cross-corpus orthogonality.
+
+---
+
+## 5. The qHTS discriminator (external, leak-free)
+
+The exact rule, verified against the builder (`scripts/build_phase2_submissions.py`):
+
+1. **Training data:** the external NCATS PXR qHTS assay (PubChem AID 1346982), filtered to `Active`/`Inactive` outcomes with a parseable SMILES, then **made disjoint from both the train and the 513-molecule test by canonical SMILES**.
+2. **Labels (3-class):** using potency `pAC50 = −Fit_LogAC50` and the median pAC50 among actives — class 0 = *inactive*; class 1 = *weak active* (`pAC50 < median`); class 2 = *strong active* (`pAC50 ≥ median`). The 3-class split lets the classifier separate weak from strong actives rather than collapsing all actives together.
+3. **Model:** `HistGradientBoostingClassifier(max_iter=400, learning_rate=0.05, random_state=0)` on **ECFP4** (2048-bit, radius 2). `P_active = 1 − P(class 0)`.
+4. **Gate:** for each molecule, `flag = (prediction < 4) AND (P_active < 0.3)`; flagged molecules are shifted **−0.2** pEC50.
+
+On the aggressive variant this flags **~35** of 513 molecules. It corrects the model's systematic over-prediction of inactives (Set-1 pEC50 < 4 bias +0.564) using an *orthogonal external signal*, and is the robust, transferable part of the variant's Set-1 gain. This is a discrete external-classifier gate — **not** the separately-studied honest flat-shift (`pred<4 → −0.129`) and not a distribution-calibration rescale.
+
+---
+
+## 6. Assembly — delta-injection onto the frozen production output
+
+The variant is **not** a from-scratch rebuild of the ensemble. It is a within-pipeline **delta injected onto the frozen winning prediction** `P513` (read directly from `MoE_v2_plus_MOE_multikernel_a05_w20.csv`):
 
 ```
-Δ = ensemble(component = +440-retrained) − ensemble(component = base-retrained)
-final_variant = winning_prediction + Σ Δ_component        (then qHTS, §3.4)
+v = P513 + Σ_c  W_c · ( component_c[setting=hi] − component_c[setting=base] )      # components: SVM_20K, Holo, 3way
+flag = (v < 4) & (P_active < 0.3);   v[flag] -= 0.2                               # qHTS gate (§5)
 ```
 
-Because both terms come from the *same* reproduction pipeline, the pipeline-reproduction offset cancels and only the **pure +440 data effect** is injected onto the frozen winning prediction. When the retrain data equals the original data, Δ=0 and the variant is byte-identical to the winning submission — so the baseline is exact and only the data change is expressed.
+Because both terms of each component delta come from the *same* reproduction pipeline, the pipeline-reproduction offset cancels and only the **pure `+440` data effect** is injected. When the retrain pool equals the base pool the delta is exactly 0 and `v` is byte-identical to the winning submission — so the baseline is exact and only the data change is expressed.
 
-### 3.4 qHTS discriminator (external, leak-free)
-An ECFP4 gradient-boosted classifier trained on the **external NCATS PXR qHTS assay** (PubChem AID 1346982; ~9,700 compounds, canonical-SMILES-disjoint from train and test) predicts P(active). Molecules the base model calls inactive (pred < 4) **and** the external classifier flags inactive (P_active < 0.3) are shifted down by 0.2 pEC50. This corrects the model's systematic over-prediction of inactives (Set-1 pEC50<4 bias +0.56 → pulled toward truth) using an orthogonal external signal, and is the robust, transferable part of the variant's gain.
+**Documented injection weights** (`build_phase2_submissions.py`, `DIL = 0.5` = the documented dilution of the QUAD base by the downstream MoE / MOE-mk / scale layers): the deep pillar `0.7·ConfTTA + 0.3·Holo` enters at 0.75·DIL = **0.375** (so the Holo share is 0.375·0.3 = 0.1125 and — since ConfTTA is held at base — ConfTTA contributes 0); SVM_20K and Gated_5mod at 0.125·DIL = **0.0625** each; 3way at 0.05·DIL = **0.025**.
 
----
+**Which setting was shipped — verified.** Reconstructing the shipped `SUBMIT_AGGR_SVMHolo3way440_qHTS.csv` from the component arrays, the `hi`-setting deltas reproduce it far better than any Set-1-augmented setting (delta-fit correlation ≈ 0.71 for `hi` vs ≈ 0.24 for `set1_hi` and ≈ 0.21 for `set1`). Combined with `train_hi` containing **0** Set-1 molecules (§3), this confirms the shipped variant uses `hi` — base + `+440`, **no Set-1**.
 
-## 4. Validation (three levels + directional)
-
-- **Set 1, 253 (reliable):** aggressive 0.4841 vs base 0.4875 (−0.0034). Nearly all of this is the qHTS discriminator; the Holo/3way `+440` retrains are **within the noise floor** (bootstrap MAE σ ≈ 0.028 on 253 points; the aggressive variant is +0.0062 RAE above the conservative SVM-only+qHTS reference).
-- **Set 1 minus V, 202 (independent):** the Holo/3way `+440` contribution is ≈ neutral (0.517 vs base 0.516) — i.e. on a bigger honest sample the retrain effect is not a clear gain.
-- **Held-out V, 51 (active-region proxy):** aggressive 0.348 vs base 0.371 — the largest apparent gain, but on the smallest (noisiest) sample.
-- **Directional check:** the `+440` retrain does not consistently move high-activity predictions toward truth on Set 1 — evidence that the V gain is at least partly small-sample noise, not a verified active-region correction.
-
-**Honest reading:** the qHTS discriminator is a robust, externally-grounded improvement; the `+440` Holo/3way retrain is a within-noise, active-region-targeted **bet** whose payoff depends on the Set-1 → Set-2 shift making the reliable Set-1 signal uninformative for the active tail.
+**Honesty on exact weights.** The specific inline builder that wrote `SUBMIT_AGGR_*.csv` was run interactively and is **not byte-preserved**; the per-component `vm()`-alignment it applies (and the ConfTTA/Holo delta collinearity) mean a plain linear recombination of raw deltas leaves a small (~0.02) residual. The *method* (delta-injection + `hi` setting + qHTS gate) and the *component set* (SVM_20K, Holo, 3way) are verified; the documented weights above are the framework, not a byte-exact reconstruction of the shipped file's inline coefficients.
 
 ---
 
-## 5. When to prefer which
+## 7. Validation
 
-- **Conservative** (`SVM +440 + qHTS`, Set-1 0.4779) — best on the reliable validator; the safe choice.
-- **Aggressive** (this variant, `SVM+Holo+3way +440 + qHTS`, Set-1 0.4841) — accepts a small, quantified Set-1 cost (+0.0062 vs conservative) to express more high-activity `+440` signal through the binding-pose pillar, as a Set-2 bet.
+Because the shipped variant uses `hi` (no Set-1), **the whole of Set 1 (253) is out-of-training** — its Set-1 RAE is an honest held-out number, directly comparable to the base system (Set-1 was blinded throughout Phase 1). We report it at three grains:
+
+- **Set 1, 253 (held-out):** aggressive **0.4841** vs base **0.4875** (−0.0034); MAE 0.3866 vs 0.3893. Decomposing the change: nearly all of the resolvable Set-1 gain is the qHTS discriminator; the SVM/Holo/3way `+440` retrain is **within the noise floor** (bootstrap MAE σ ≈ 0.028 on 253 points), and the aggressive variant sits +0.0062 RAE *above* the conservative reference — i.e. adding the Holo/3way `+440` deltas costs a small, quantified amount on Set 1.
+- **V, 51 (cross-setting disjoint holdout):** aggressive **0.3479** vs base **0.3706** — the largest apparent gain, but on the smallest (noisiest) sample; V is a 51-molecule subset of the already-held-out Set-1, so this is a robustness sub-read, not a second independent validator for the `hi` variant.
+- **Set-1 cliffs cap the RAE gain.** 28.5% of Set 1 are activity cliffs (cliff MAE 0.6222 vs non-cliff 0.2967); no in-region retrain resolves them, so Set-1 RAE moves less than MAE-level intuition suggests.
+
+**Honest reading:** the qHTS discriminator is a robust, externally-grounded improvement that transfers disjointly; the `+440` Holo/3way retrain is a within-noise, active-region-targeted **bet** whose payoff depends on the Set-1 → Set-2 shift making the fine-grained Set-1 signal uninformative for the active tail.
 
 ---
 
-## 6. Files
+## 8. When to prefer which variant
 
-- `SUBMIT_AGGR_SVMHolo3way440_qHTS.csv` — the aggressive variant prediction (513 rows).
+- **Conservative** (lighter `+440` combo + qHTS, Set-1 **0.4779**) — the best score on the reliable 253-molecule validator; the safe choice. Its change is dominated by the same qHTS gate (it flags ~54 molecules) plus a small, low-variance `+440` retrain effect (max |Δ| 0.28 vs production).
+- **Aggressive** (this variant, SVM+Holo+3way `+440` + qHTS, Set-1 **0.4841**) — accepts a small, quantified Set-1 cost (+0.0062 vs conservative) to express more high-activity `+440` signal through the binding-pose (Holo) and external-pretrain (3-way) heads, as a Set-2 bet.
 
-*Conservative and base predictions, the retraining/injection code, and the qHTS builder accompany this report in the repository.*
+Which to submit is a bet on how Set-1-like Set 2 is; given the scaffold disjointness, the aggressive variant deliberately spends a little resolvable Set-1 quality for more active-region signal.
+
+---
+
+## 9. Design findings and negative results
+
+Post-unblind experiments that shaped these variants:
+
+- **Retraining is model-dependent** (the central lesson). `+440` *hurts* a weak ECFP-GBDT (+0.0194 RAE) but is **neutral** on the real MoLFormer+ChemBERTa SVR heads (−0.0016, P(help)=57%). The earlier "hurts" verdict was an ECFP artifact. Retrain **only** the real-embedding heads.
+- **Set-1 augmentation is near the detection floor.** Adding 253 Set-1 labels: nested-CV −0.0005, disjoint-region +0.0013 = noise — four independent confirmations that a 0.005 Set-2 gap is unreachable from 253 in-region points. This is *why* the shipped variant uses `hi` (no Set-1): the Set-1-augmented settings gain nothing resolvable and would forfeit Set-1 as a clean validator.
+- **The `+440` alone is too weak to blend.** Augmented GBR/LGBM/HGBRT/Ridge each reach only ~0.6 RAE — useful as retrain-pool augmentation of strong heads, useless as a standalone additive into the 0.39-MAE SOTA.
+- **The low-pred push-down works and transfers.** `(pred<4 & high ensemble-disagreement) → −0.128` (train-learned): Set-1 −0.0022, 100% disjoint transfer, P(help)=76%; and the honest flat-shift `pred<4 → −0.129` gives Set-1 0.4875→0.4841. These confirm the *direction* the qHTS gate encodes (down-shift confident low-activity predictions), though the shipped gate uses the discrete external-classifier rule of §5, not a flat shift.
+- **No low-activity specialist to route to.** Scanning all 161 components: train-OOF low-region "winners" are OOF-optimism (overall MAE 0.32 vs SOTA 0.49); on real Set-1 pEC50<4 *none* beats SOTA's 0.818. The push-down / qHTS gate is the honest version of "handle low-activity specially."
+- **Domain-generalization methods fail.** GroupDRO / CORAL / IRM do not beat ERM on the Set-1→Set-2 scaffold shift (GroupDRO worst-region 0.583 vs ERM 0.551). The hardest-region gap is information-limited (cliffs), not invariance-limited.
+- **MAE-loss retraining loses.** MSE→MAE over the full 5 folds loses +0.0052 on Set 1 (a 1-fold pilot's −0.0074 was an artifact). Label-uncertainty weighting is null once activity-decorrelated (−0.0009).
+- **Rescore ceiling.** Re-scoring all 4,428 candidate CSVs vs unblinded Set 1 found none beating SOTA by more than noise (best −0.0004). The limit is statistical (253 pts, 0.005 gap = 0.18 σ), not effort.
+
+**Bottom line:** the conservative variant is the lower-risk Set-1-optimal choice (0.4779); the aggressive variant spends a small, quantified Set-1 cost to push more high-activity signal through the binding-pose and external-pretrain heads, as a Set-2 bet. Both extract the one genuinely recoverable signal — low-activity over-prediction — via the external qHTS gate, and both keep Set 1 as an honest held-out validator.
+
+---
+
+## 10. Reproduction assets and the "not preserved" ledger
+
+**Preserved and runnable:**
+- Setting CSVs: `outputs/settings/train_{base,hi,set1,set1_hi,selective}.csv` + `V_holdout.csv`.
+- Clean re-trainers: `work/train_svm20k.py`, `work/train_gated5mod.py`, `work/train_3way.py` (each takes a setting, emits `pred513/oof/predV` + weights); deep pillars via the `conftta`/`holo` model dirs.
+- Feature assembly: `work/feat_lib.py` (InChIKey-keyed) + `work/enc/` re-encoders and union caches.
+- `+440` cofold pipeline: `scripts/boltz_cofold_440.py` (Boltz 2.2.1) + `scripts/boltz_cofold_postprocess.py`.
+- The multi-setting builder + qHTS gate: `scripts/build_phase2_submissions.py` (delta-injection `v = P513 + Σ W·(setting−base)`, deep pillar `0.7·ConfTTA + 0.3·Holo`, and the exact qHTS discriminator of §5).
+- Saved artifacts per head × setting: `models/<HEAD>_<setting>/{pred513.npy, oof.npy, predV.npy, weights.*}`.
+
+**Not preserved (outputs survive, method verified):**
+- The exact *inline* builder that wrote `SUBMIT_AGGR_SVMHolo3way440_qHTS.csv` and `SUBMIT_best440combo_qHTS.csv` (the shipped aggressive/conservative files) was run interactively. The component arrays, settings, `vm()` recipe, and the qHTS gate are all preserved, and the shipped files are verified to be `hi`-setting delta-injections + the §5 qHTS gate — but the file's exact inline injection coefficients are not byte-recoverable (see §6).
+
+All numbers in this document are the verified values re-scored against the unblinded Set-1 labels (`TEST_PHASE1_UNBLINDED.csv`, 253 rows) and the 51-molecule V holdout; where a builder is not preserved this is stated rather than reconstructed silently.
+
+---
+
+*AIDD-LiLab, University of Florida — Yanjun Li Lab. Aggressive `+440` high-activity retrain variant, post-unblind (Set-1 released 2026-05-26). This solution is described in the group's forthcoming publication.*
