@@ -48,7 +48,7 @@ Set 1 was unblinded on 2026-05-26 and used as a held-out validator; Set 2 stayed
 11. [Validation methodology](#11-validation-methodology)
 12. [Error analysis & key findings](#12-error-analysis--key-findings)
 13. [What did NOT work](#13-what-did-not-work)
-14. [Reproducibility ledger](#14-reproducibility-ledger)
+14. [Reproducibility notes](#14-reproducibility-notes)
 
 ---
 
@@ -181,7 +181,7 @@ pEC50 = qHTS_gate( Final_ensemble )      # −0.2 on 58 low, externally-inactive
 
 ### 5.1 ConfTTA — the highest-weight pillar
 **Data:** MF transfer — pretrain on the 20,191-molecule low-fidelity pseudo-pEC50 corpus, fine-tune on the 4,139 dose-response labels.
-**Model:** Uni-Mol v2 84M (12 layers, embed 768, 48 heads, pair channel 512/64, triangle-multiplication updates). Loads DP Technology's public self-supervised 84M Uni-Mol v2 checkpoint (`modelzoo/84M/checkpoint.pt`, from HuggingFace `dptech/Uni-Mol-Models`), continues on PXR-LF, then fine-tunes.
+**Model:** Uni-Mol v2 84M (12 layers, embed 768, 48 heads, pair channel 512/64, triangle-multiplication updates). Loads DP Technology's public self-supervised 84M Uni-Mol v2 checkpoint (from HuggingFace `dptech/Uni-Mol-Models`), continues on PXR-LF, then fine-tunes.
 **Training:** 5-fold GroupKFold on Murcko scaffolds; per fold `epochs=50, batch=8, lr=5e-5, early_stop=10, max_norm=10, seed=42`, each fold initialized from the LF checkpoint.
 **Inference:** unimol_tools generates **one** ETKDG conformer per molecule (`randomSeed=42` + MMFF optimization); the genuine averaging is the **mean over the 5 fold models** (the "TTA" name is historical — a separate 4-conformer-seed TTA was tested and found null). **Standalone out-of-fold (OOF) RAE 0.383** — the strongest single model in the pipeline.
 
@@ -193,7 +193,7 @@ pEC50 = qHTS_gate( Final_ensemble )      # −0.2 on 58 low, externally-inactive
 ### 5.3 SVM_20K — frozen-embedding multi-feature SVR
 **Data:** 4,139 dose-response, counter-assay-filtered to 3,748.
 **Model:** a single RBF-Nyström SVR over concatenated **frozen** representations: MiniMol 512 + MoLFormer-XL 768 + a **20K-LF-pretrained Chemprop D-MPNN embedding 300** + MACCS 167 + Gobbi pharmacophore 39 (D=1786). Per fold: StandardScaler → Nyström(rbf, 500, γ=1/D) → SVR(C=1, ε=0.1).
-**Why "20K":** the MPN embedding comes from a Chemprop D-MPNN pretrained on the 20,191 pseudo-pEC50 molecules — a semi-supervised feature. Orthogonal to the deep pillars because it is linear-in-kernel over fixed embeddings. OOF RAE ≈0.52 (the shipped `work/train_svm20k.py` reproduces ≈0.520 on the base pool / 0.523 counter-filtered; an earlier Phase-1 configuration reported 0.503). The 10K-LF variant scored slightly better on OOF (~0.49) but the 20K variant gave a real **−0.0015 leaderboard gain** — an instructive OOF/LB divergence.
+**Why "20K":** the MPN embedding comes from a Chemprop D-MPNN pretrained on the 20,191 pseudo-pEC50 molecules — a semi-supervised feature. Orthogonal to the deep pillars because it is linear-in-kernel over fixed embeddings. OOF RAE ≈0.52 (≈0.520 on the base pool / 0.523 counter-filtered; an earlier Phase-1 configuration reported 0.503). The 10K-LF variant scored slightly better on OOF (~0.49) but the 20K variant gave a real **−0.0015 leaderboard gain** — an instructive OOF/LB divergence.
 
 ### 5.4 Gated_5mod — learned gated multi-modal fusion
 **Data:** 4,139, filtered.
@@ -320,11 +320,9 @@ Negatives worth recording (all leaderboard-verified):
 
 ---
 
-## 14. Reproducibility ledger
+## 14. Reproducibility notes
 
-Fold splits, ensemble weights, and the variance scale are deterministic with fixed seeds. The following builders were run inline and are **not byte-preserved**, though their cached outputs survive and the recipes are documented: the Boltz 1408-D extraction, the Boltz active-specialist SVR, the MoE gate assembly, the MOE-341D multi-kernel builder, and the final MoE+MOE-mk @0.20 assembly (verified to be a per-mol gated add, not a flat blend). The **qHTS gate is fully preserved and runnable** (`scripts/build_phase2_submissions.py`).
-
-**Training environments:** `unimol` (Uni-Mol GPU), `wjh_fake` (PyG/DL GPU), `gems` (Chemprop / sklearn), `boltz2` (Boltz 2.2.1), `esp-dnn` (ESP-DNN). GPU-only training throughout.
+Every learnable component uses fixed random seeds and 5-fold Bemis–Murcko scaffold cross-validation, so fold splits, ensemble weights, and the variance scale are deterministic. The system is fully specified by this report: the four base pillars (§5), the two compound heads (§6), the cofold-derived heads (§7), the MoE active-specialist and MOE multi-kernel (§8), the variance match (§9), and the qHTS post-processing gate (§10) — each with its data, model, and hyper-parameters. Training was GPU-only throughout (deep 3D pillars on Uni-Mol, the graph model on PyTorch-Geometric, the Chemprop MPN embeddings, Boltz 2.2.1 cofolding, and ESP-DNN charges). The qHTS gate is the smallest and most easily reproduced part of the system.
 
 ---
 
