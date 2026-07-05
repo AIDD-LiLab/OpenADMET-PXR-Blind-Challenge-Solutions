@@ -17,7 +17,7 @@
 | **2** | **AIDD-LiLab** (this solution) | **0.4092** | **0.5676** | 0.591 | 0.825 | 0.644 | **No** |
 | 3 | AIDD-LiLab-Aggressive ([variant](../Aggressive%20Version%20Report/README.md)) | 0.4104 | 0.5692 | 0.589 | 0.822 | 0.641 | **No** |
 
-The only non-proprietary team in the top three, within 0.0045 RAE of the proprietary-data winner — and both our submissions (this main solution and the aggressive variant) finished ahead of every other public-data entry.
+Our two submissions (this main solution and the aggressive variant) took **2nd and 3rd overall**; the only system ahead of them used proprietary data, so among non-proprietary-data teams we placed **1st and 2nd** — within 0.0045 RAE of the proprietary-data winner.
 
 **The metric** is Relative Absolute Error, `RAE = Σ|ŷ−y| / Σ|y−ȳ|` (lower is better; 1.0 = predicting the mean).
 
