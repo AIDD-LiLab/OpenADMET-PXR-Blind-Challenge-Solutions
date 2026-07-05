@@ -22,7 +22,7 @@ Final challenge leaderboard (**Set 2**, 260 hidden molecules):
 | 2 | **AIDD-LiLab** (main: base + qHTS) | 0.4092 | **0.5676** | 0.591 | 0.825 | 0.644 | No |
 | 3 | **AIDD-LiLab-Aggressive** (this variant) | 0.4104 | **0.5692** | 0.589 | 0.822 | 0.641 | No |
 
-**How the bet resolved (honestly).** The aggressive variant finished **#3 overall** — ahead of every other public-data team's entry, but **0.0016 RAE behind our own main solution** on Set 2. The extra `+440` retrain of the deep/external heads was a Set-2 bet that **slightly lost**: it cost a hair of accuracy rather than gaining. This is exactly what the pre-submission analysis predicted — the `+440` retrain was always *within the Set-1 noise floor* (bootstrap σ ≈ 0.028), a coin-flip whose downside was small and bounded. It landed on the small-downside side. The main solution's conservative choice (frozen ensemble + qHTS only) was the correct one.
+**How the bet resolved (honestly).** The bet slightly lost: the aggressive variant finished **#3 overall, 0.0016 RAE behind our own main solution** on Set 2 — within the Set-1 noise floor (bootstrap σ ≈ 0.028), so the conservative frozen-ensemble choice was the right call. This is exactly what the pre-submission analysis predicted: the `+440` retrain was always a small, bounded-downside coin-flip, and it landed on the downside. Even so, **both AIDD-LiLab entries finished ahead of every other public-data team**.
 
 We publish this variant in full because the *reasoning* was sound and the outcome is instructive: a well-constructed, honestly-quantified aggressive bet that lost by less than a third of the noise floor.
 
@@ -33,6 +33,8 @@ We publish this variant in full because the *reasoning* was sound and the outcom
 | Base ensemble (Phase-1 winner) | 0.4875 | 0.3893 | 0.3706 |
 | Main solution (base + qHTS) | 0.4777 | 0.3815 | — |
 | **Aggressive (this variant)** | 0.4841 | 0.3866 | 0.3479 |
+
+*(V(51) = a 51-molecule cross-setting held-out subset, see §3; the **qHTS gate** = an external cheap-assay classifier applied only as post-processing to nudge likely-inactive low predictions down, see §5.)*
 
 All Set-1 numbers are **fully held-out**: this variant trains on the `hi` setting (base + `+440`, containing **zero** Set-1 molecules — verified in §3), so all 253 Set-1 molecules are out-of-training, as they are for the base system.
 
@@ -116,6 +118,10 @@ This corrects the systematic over-prediction of inactives (Set-1 pEC50 < 4 bias 
 
 ## 6. Assembly
 
+**In one line:** take the frozen winning prediction, add the small change caused by retraining three components on `+440`, then apply the qHTS gate — nothing else moves.
+
+### 6.1 The delta-injection
+
 The variant is **not** a from-scratch rebuild. It is a within-pipeline **delta injected onto the frozen winning prediction** `P513` (read from `MoE_v2_plus_MOE_multikernel_a05_w20.csv`):
 
 ```
@@ -124,6 +130,8 @@ flag = (v < 4) & (P_active < 0.3) ;   v[flag] -= 0.2               # qHTS gate (
 ```
 
 Both terms of each delta come from the *same* reproduction pipeline, so the pipeline-reproduction offset cancels and only the **pure +440 data effect** is injected. When the retrain pool equals the base pool the delta is exactly 0 and `v` is byte-identical to the winner — so the baseline is exact and only the data change is expressed.
+
+### 6.2 Injection weights
 
 **Documented injection weights** (`build_phase2_submissions.py`). `DIL = 0.5` is the documented dilution of the QUAD base by the downstream MoE / MOE-mk / scale layers; each component's injection weight = its QUAD weight × DIL:
 
@@ -135,6 +143,8 @@ Both terms of each delta come from the *same* reproduction pipeline, so the pipe
 | 3-way | 0.05 | **0.025** | yes |
 
 (The deep pillar is `0.7·ConfTTA + 0.3·Holo` at a combined 0.375; only the Holo share carries a delta, since ConfTTA is held at its base array.)
+
+### 6.3 Setting & provenance verification
 
 **Which setting shipped — verified.** Reconstructing the shipped file from the component arrays, the `hi`-setting deltas reproduce it far better than any Set-1-augmented setting (delta-fit correlation ≈ 0.71 for `hi` vs ≈ 0.24 for `set1_hi`). Combined with `train_hi` containing **0** Set-1 molecules, this confirms the shipped variant uses `hi` — base + `+440`, **no Set-1**.
 

@@ -17,11 +17,11 @@
 | **2** | **AIDD-LiLab** (this solution) | **0.4092** | **0.5676** | 0.591 | 0.825 | 0.644 | **No** |
 | 3 | AIDD-LiLab-Aggressive ([variant](../Aggressive%20Version%20Report/README.md)) | 0.4104 | 0.5692 | 0.589 | 0.822 | 0.641 | **No** |
 
-We placed **2nd overall and 1st among all teams that used no proprietary data** — the only non-proprietary team in the top three, and within 0.0045 RAE of a proprietary-data system. Both of our submissions (this main solution and the aggressive variant) finished ahead of every other public-data entry.
+The only non-proprietary team in the top three, within 0.0045 RAE of the proprietary-data winner — and both our submissions (this main solution and the aggressive variant) finished ahead of every other public-data entry.
 
 **The metric** is Relative Absolute Error, `RAE = Σ|ŷ−y| / Σ|y−ȳ|` (lower is better; 1.0 = predicting the mean).
 
-**Score at each evaluation stage** (all three are the *same* system; they differ only in which molecules were scored):
+**Score at each evaluation stage** — one system, three molecule subsets. **Only the bolded Set 2 row (0.5676) is the official final score**; Set 1 and combined-513 are validation context, not competing results:
 
 | Stage | Molecules | RAE | MAE | Notes |
 |---|---|---:|---:|---|
@@ -55,6 +55,14 @@ Set 1 was unblinded on 2026-05-26 and used as a held-out validator; Set 2 stayed
 ## 1. How it works in one picture
 
 The system is a **layered ensemble**: a strong 4-pillar base, two orthogonal correction heads, a Mixture-of-Experts active-specialist, a commercial-descriptor multi-kernel, a variance rescale, and finally an external qHTS post-processing gate.
+
+**Quick glossary** (so the diagram labels parse on first read):
+- **ConfTTA / Holo** — the two deep 3D models (both Uni-Mol v2); ConfTTA sees a free-molecule 3D shape, Holo sees the docked, protein-bound pose.
+- **cofold** — a predicted 3D structure of the ligand bound inside the PXR protein pocket.
+- **active-specialist** — a model trained only on the most-active compounds, mixed in only for molecules predicted to be active.
+- **multi-kernel** — a support-vector model combining a fingerprint-similarity kernel with an RBF kernel over descriptors.
+- **qHTS gate** — an external cheap-assay classifier used as post-processing to nudge likely-inactive low predictions down.
+- **ens12** — a fixed reference prediction distribution that every component is rescaled to match before mixing.
 
 ```
  SMILES ─┐
@@ -101,10 +109,12 @@ Three principles carried the whole solution:
 | External NCATS PXR qHTS (PubChem AID 1346982) | ~9,700 | the qHTS post-processing classifier (§10) |
 | Blinded test | 513 = **Set 1 (253) + Set 2 (260)** | Set 1 = validator, Set 2 = final scorer |
 
+*Two naming notes: **MOE** = Molecular Operating Environment, a commercial cheminformatics package (**not** the Mixture-of-Experts "MoE" layer of §8.1). **LF** = low-fidelity single-concentration data; **MF** = multi-fidelity (pretrain on LF, then fine-tune on real labels).*
+
 Two facts about this dataset shaped every choice:
 
 - **The test set is active-enriched and narrower than training** (predicted std ≈ 0.79 vs train std ≈ 1.12) — a real potency/scaffold shift, not an i.i.d. split.
-- **Activity cliffs dominate the residual.** ~28% of Set 1 are near-identical to a training molecule yet ≥1 log-unit different in potency; that portion of the error is structurally irreducible.
+- **Activity cliffs** (structurally near-identical molecules with very different potency) **dominate the residual.** ~28% of Set 1 are near-identical to a training molecule yet ≥1 log-unit different in potency; that portion of the error is structurally irreducible.
 
 **Multi-fidelity (MF) transfer** is the single most important data lever for the deep pillars: pretrain on ~20K cheap, noisy single-concentration readouts (calibrated to a pseudo-pEC50), then fine-tune on the 4,139 real dose-response labels.
 
@@ -131,13 +141,15 @@ Every learnable piece of the winning system, with **the data it trained on and t
 | **variance scale** | global affine post-mix | — | `mean + 1.08·(x−mean)` | scale tuned by an adversarial P(test)-weighted objective |
 | **qHTS gate** (§10) | **post-processing (final layer)** | **external NCATS AID 1346982** (disjoint from train & test) | **ECFP4 → 3-class HistGradientBoosting classifier** | `(pred<4) & (P_active<0.3) → −0.2`; touches **58 / 513** molecules |
 
+*Feature shorthand used above: MiniMol / MoLFormer-XL = pretrained molecular embeddings; MACCS / ECFP4 / ph4 = structural or pharmacophore fingerprints; MPN = message-passing-network embedding; IFP = protein–ligand interaction fingerprint; ESP = electrostatic-potential charges; Mordred = physicochemical descriptors.*
+
 All learnable components use **5-fold Bemis–Murcko scaffold GroupKFold**; the reported test vector is the 5-fold average.
 
 ---
 
 ## 4. Architecture — the layered assembly
 
-Each layer variance-matches to a fixed reference `ens12` (via `vm(x, ref)` = shift+scale `x` to `ref`'s mean/std) and adds a targeted correction.
+Each layer variance-matches to a fixed reference `ens12` (via `vm(x, ref)` = shift+scale `x` to `ref`'s mean/std) and adds a targeted correction. The leaderboard walks down as the layers stack: **Compound 0.4956 → MoE_v2 0.4941 → +MOE-mk & scale 0.4897 → +qHTS gate 0.4777** (the `# LB ...` comments in the blocks below mark each step).
 
 **QUAD base:**
 ```
@@ -209,7 +221,7 @@ Two small, deliberately-orthogonal heads added as low-weight signed deltas on th
 
 ## 7. The cofold structure pipeline
 
-Every ligand is cofolded into the PXR ligand-binding domain (UniProt O75469) with Boltz, yielding ~4,728 predicted protein–ligand complexes. Cofold enters the winning system **three independent ways**:
+Every ligand is cofolded into the PXR ligand-binding domain (UniProt O75469) with Boltz (Boltz and Chai1, used below, are AlphaFold-style 3D structure predictors), yielding ~4,728 predicted protein–ligand complexes. Cofold enters the winning system **three independent ways**:
 
 1. **Binding pose → Holo pillar** (§5.2).
 2. **Per-molecule cofold additives** (below).
