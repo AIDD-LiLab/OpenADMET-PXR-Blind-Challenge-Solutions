@@ -1,6 +1,6 @@
 # OpenADMET PXR (NR1I2) Activation Challenge — Winning Solution
 
-**Team:** AIDD-LiLab — Department of Medicinal Chemistry, College of Pharmacy, University of Florida (Yanjun Li Lab)
+**Team:** AIDD-LiLab — Department of Medicinal Chemistry, College of Pharmacy, University of Florida (AIDD Team)
 **Task:** Predict human PXR (Pregnane X Receptor, gene *NR1I2*) agonist potency **pEC50** from small-molecule structure.
 **Final system:** `MoE_v2 + MOE-multikernel` ensemble **+ qHTS post-processing gate**.
 **Submitted file:** `CAND_qHTS_gated_multiclass.csv` (513 rows: `SMILES, Molecule Name, pEC50`).
@@ -326,4 +326,4 @@ Every learnable component uses fixed random seeds and 5-fold Bemis–Murcko scaf
 
 ---
 
-*AIDD-LiLab, University of Florida — Yanjun Li Lab. Final rank #2 / #1 among non-proprietary-data teams (Set 2, RAE 0.5676). This solution is described in the group's forthcoming publication.*
+*AIDD-LiLab, University of Florida. Final rank #2 / #1 among non-proprietary-data teams (Set 2, RAE 0.5676). This solution is described in the group's forthcoming publication.*
